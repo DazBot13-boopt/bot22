@@ -21,9 +21,11 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Finance": [
         "bitcoin", "btc", "eth", "ethereum", "crypto", "fed", "interest rate",
         "inflation", "gdp", "s&p", "nasdaq", "dow", "stock", "dollar", "eur",
-        "gold", "oil", "commodit", "treasury", "yield", "bond", "market",
-        "economy", "recession", "cpi", "fomc", "rate cut", "rate hike",
-        "price", "usd", "gbp", "jpy", "yen",
+        "gold", "silver", "oil", "crude", "commodit", "treasury", "yield", "bond",
+        "market", "economy", "recession", "cpi", "fomc", "rate cut", "rate hike",
+        "price", "usd", "gbp", "jpy", "yen", "hit", "reach", "dip", "high", "low",
+        "anthropic", "openai", "valuation", "market cap", "ipo",
+        "solana", "sol", "xrp", "ripple", "bnb", "altcoin",
     ],
     "Politics": [
         "election", "president", "senate", "house", "congress", "vote",

@@ -148,9 +148,16 @@ class CopyEngine:
         tracker = tracker_map[cid]
         tracker["trade_count"] += 1
         outcome = trade.outcome
-        if outcome in ("Up", "Down"):
-            tracker[outcome] += trade.usdc_size
-            tracker[f"{outcome}_shares"] += trade.size
+        # Les SELL sont ignorés — on ne peut pas copier une vente
+        if trade.side == "SELL":
+            ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, "SELL ignoré")
+            self.trades.append(ct)
+            return ct
+        # Normalise Yes/No → Up/Down
+        if outcome in ("Up", "Down", "Yes", "No"):
+            side = "Up" if outcome in ("Up", "Yes") else "Down"
+            tracker[side] += trade.usdc_size
+            tracker[f"{side}_shares"] += trade.size
             tracker["total_usdc"] += trade.usdc_size
 
         up_usdc = tracker["Up"]
