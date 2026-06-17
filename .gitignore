@@ -1,0 +1,20 @@
+# Secrets — NE JAMAIS committer
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# traders.json est versionné intentionnellement (base de données traders)
+# Pour exclure : décommenter la ligne ci-dessous
+# traders.json
