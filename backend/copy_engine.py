@@ -148,11 +148,17 @@ class CopyEngine:
         tracker = tracker_map[cid]
         tracker["trade_count"] += 1
         outcome = trade.outcome
-        # Les SELL sont ignorés — on ne peut pas copier une vente
+
+        # ── SELL : vendre notre position si on en a une ───────────────────────
         if trade.side == "SELL":
-            ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, "SELL ignoré")
+            sold = await self._handle_sell(trade, cid, tracker, now)
+            if sold:
+                return sold
+            # Pas de position à vendre → ignorer silencieusement
+            ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, "SELL — pas de position ouverte")
             self.trades.append(ct)
             return ct
+
         # Normalise Yes/No → Up/Down
         if outcome in ("Up", "Down", "Yes", "No"):
             side = "Up" if outcome in ("Up", "Yes") else "Down"
@@ -260,6 +266,92 @@ class CopyEngine:
 
         self.trades.append(copied)
         return copied
+
+    # ── Gestion des SELL ──────────────────────────────────────────────────────
+
+    async def _handle_sell(
+        self, trade: TargetTrade, cid: str, tracker: dict, now: float
+    ) -> "CopiedTrade | None":
+        """
+        Quand le trader vend, on cherche si on a une position ouverte
+        sur ce même marché et on la vend aussi.
+        """
+        import time as _time
+
+        # Chercher notre position copiée sur ce marché
+        open_trade = None
+        for t in self.trades:
+            if (
+                t.target_trade.condition_id == cid
+                and t.copy_status == CopyStatus.COPIED
+                and not t.resolved
+                and not t.sold_early
+                and t.trader_wallet == trade.trader_wallet
+            ):
+                open_trade = t
+                break
+
+        if open_trade is None:
+            return None
+
+        # Prix de vente = prix actuel du trade du trader
+        sell_price = trade.price if trade.price > 0 else open_trade.price
+        proceeds = open_trade.shares * sell_price
+        pnl = proceeds - open_trade.amount_usdc
+
+        # Mettre à jour la position
+        open_trade.sold_early = True
+        open_trade.sell_price = sell_price
+        open_trade.sell_timestamp = now
+        open_trade.resolved = True
+        open_trade.pnl = pnl
+        open_trade.won = pnl >= 0
+
+        # Mettre à jour le wallet demo
+        if not self.config.is_production:
+            self.demo_wallet.balance += proceeds
+            self.demo_wallet.total_returned += proceeds
+            pos_key = f"{cid}_{open_trade.target_trade.outcome}"
+            if pos_key in self.demo_wallet.positions:
+                self.demo_wallet.positions[pos_key]["shares"] = 0
+                self.demo_wallet.positions[pos_key]["current_value"] = 0
+
+        result = "+" if pnl >= 0 else ""
+        logger.info(
+            "📤 VENTE COPIÉE: %s | %.4f shares @ %.4f → ${:.2f} | PnL: %s$%.2f".format(proceeds),
+            trade.title[:50], open_trade.shares, sell_price, result, abs(pnl)
+        )
+
+        # En production : placer un ordre SELL réel
+        if self.config.is_production:
+            await self._execute_production_sell(open_trade, trade)
+
+        return open_trade
+
+    async def _execute_production_sell(self, open_trade: "CopiedTrade", sell_signal: TargetTrade) -> None:
+        """Vente réelle sur Polymarket."""
+        try:
+            self._ensure_prod_client()
+            from py_clob_client_v2 import MarketOrderArgs, OrderType, PartialCreateOrderOptions, Side
+
+            tick_size = self._get_tick_size(open_trade.target_trade.asset)
+            resp = self._prod_client.create_and_post_market_order(
+                order_args=MarketOrderArgs(
+                    token_id=open_trade.target_trade.asset,
+                    amount=open_trade.shares,
+                    side=Side.SELL,
+                    order_type=OrderType.FOK,
+                ),
+                options=PartialCreateOrderOptions(tick_size=tick_size),
+                order_type=OrderType.FOK,
+            )
+            success, reason = self._classify_order_response(resp)
+            if success:
+                logger.info("PROD SELL OK: %s | resp: %s", open_trade.target_trade.title[:40], resp)
+            else:
+                logger.error("PROD SELL REJETÉ: %s | %s", open_trade.target_trade.title[:40], reason)
+        except Exception as e:
+            logger.error("Prod sell échoué: %s", e)
 
     # ── Exécution Demo ────────────────────────────────────────────────────────
 
@@ -554,6 +646,8 @@ class CopyEngine:
                 "traders_aligned": t.traders_aligned,
                 "trader_username": t.trader_username,
                 "trader_specialty": t.trader_specialty,
+                "sold_early": t.sold_early,
+                "sell_price": t.sell_price,
             })
         return result
 

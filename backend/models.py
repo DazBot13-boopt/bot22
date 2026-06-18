@@ -17,11 +17,12 @@ class TradeSide(str, Enum):
 
 class CopyStatus(str, Enum):
     COPIED = "COPIED"
+    SOLD = "SOLD"                       # position vendue suite au SELL du trader
     SKIPPED_TOO_LATE = "SKIPPED_TOO_LATE"
     SKIPPED_BUDGET = "SKIPPED_BUDGET"
     SKIPPED_NON_TRADE = "SKIPPED_NON_TRADE"
-    SKIPPED_CATEGORY = "SKIPPED_CATEGORY"   # trader hors domaine de prédilection
-    SKIPPED_CONVICTION = "SKIPPED_CONVICTION"  # conviction insuffisante
+    SKIPPED_CATEGORY = "SKIPPED_CATEGORY"
+    SKIPPED_CONVICTION = "SKIPPED_CONVICTION"
     SKIPPED_WEEKLY_LIMIT = "SKIPPED_WEEKLY_LIMIT"
     FAILED = "FAILED"
 
@@ -81,9 +82,13 @@ class CopiedTrade:
     resolved: bool = False
     won: bool = False
     reason: str = ""
+    # Vente anticipée (quand le trader vend avant résolution)
+    sold_early: bool = False
+    sell_price: float = 0.0
+    sell_timestamp: float = 0.0
     # Contexte décision
-    conviction_pct: float = 0.0     # % du côté dominant
-    traders_aligned: int = 0        # nb de traders experts sur ce trade
+    conviction_pct: float = 0.0
+    traders_aligned: int = 0
     trader_wallet: str = ""
     trader_username: str = ""
     trader_specialty: str = ""

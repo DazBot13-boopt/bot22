@@ -313,6 +313,7 @@ function catBadge(cat) {
 
 function statusBadge(s) {
   if (s === 'COPIED') return '<span class="badge badge-copied">Copié</span>';
+  if (s === 'SOLD') return '<span class="badge badge-won">Vendu</span>';
   if (s && s.startsWith('SKIPPED')) return '<span class="badge badge-skipped">Ignoré</span>';
   if (s === 'FAILED') return '<span class="badge badge-failed">Échec</span>';
   return '<span class="badge">' + s + '</span>';
