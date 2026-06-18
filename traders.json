@@ -16,5 +16,41 @@
     "roi": 0.0,
     "notes": "Multi-cat\u00e9gorie - filtre d\u00e9sactiv\u00e9 (Finance+Crypto+Politics)",
     "active": true
+  },
+  {
+    "wallet": "0x8470248884a4b364829963afe634075d189070c4",
+    "username": "Alert-Oncology",
+    "specialty": "Finance",
+    "win_rate": 0.0,
+    "roi": 0.0,
+    "notes": "2800$ trades Bitcoin aujourd hui",
+    "active": true
+  },
+  {
+    "wallet": "0xfc6b41953f21544bd99e9fc1bb16edc95c063196",
+    "username": "Fond-Eavesdropper",
+    "specialty": "Finance",
+    "win_rate": 0.0,
+    "roi": 0.0,
+    "notes": "332$ Bitcoin Up/Down",
+    "active": true
+  },
+  {
+    "wallet": "0x8e4e835f42c5d8e5d8f3c6c8ad6795bb6c3e6c9c",
+    "username": "Dirty-Trap",
+    "specialty": "Finance",
+    "win_rate": 0.0,
+    "roi": 0.0,
+    "notes": "230$ Bitcoin Up/Down",
+    "active": true
+  },
+  {
+    "wallet": "0x2277c18fb73d4cfbd61384be80ef9339a9496604",
+    "username": "Bright-Jasmine",
+    "specialty": "Finance",
+    "win_rate": 0.0,
+    "roi": 0.0,
+    "notes": "216$ ETH Up/Down",
+    "active": true
   }
 ]

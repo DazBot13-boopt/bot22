@@ -177,7 +177,18 @@ async def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
+async def dashboard(credentials: HTTPBasicCredentials | None = Depends(_basic_auth)):
+    """Dashboard — protégé si DASHBOARD_PASSWORD est défini."""
+    if config.auth_enabled:
+        if credentials is None or not (
+            secrets.compare_digest(credentials.username.encode(), config.dashboard_user.encode())
+            and secrets.compare_digest(credentials.password.encode(), config.dashboard_password.encode())
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Basic"},
+            )
     with open("frontend/index.html") as f:
         return HTMLResponse(content=f.read())
 

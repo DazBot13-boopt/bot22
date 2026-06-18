@@ -299,7 +299,22 @@ class CopyEngine:
         proceeds = open_trade.shares * sell_price
         pnl = proceeds - open_trade.amount_usdc
 
-        # Mettre à jour la position
+        result = "+" if pnl >= 0 else ""
+        logger.info(
+            "📤 VENTE COPIÉE: %s | %.4f shares @ %.4f → $%.2f | PnL: %s$%.2f",
+            trade.title[:50], open_trade.shares, sell_price, proceeds, result, abs(pnl)
+        )
+
+        # En production : vendre AVANT de marquer comme résolu
+        sell_ok = True
+        if self.config.is_production:
+            sell_ok = await self._execute_production_sell(open_trade, trade)
+
+        if not sell_ok:
+            logger.error("Vente production échouée — position conservée ouverte")
+            return None
+
+        # Mettre à jour la position (seulement si vente OK)
         open_trade.sold_early = True
         open_trade.sell_price = sell_price
         open_trade.sell_timestamp = now
@@ -316,20 +331,10 @@ class CopyEngine:
                 self.demo_wallet.positions[pos_key]["shares"] = 0
                 self.demo_wallet.positions[pos_key]["current_value"] = 0
 
-        result = "+" if pnl >= 0 else ""
-        logger.info(
-            "📤 VENTE COPIÉE: %s | %.4f shares @ %.4f → ${:.2f} | PnL: %s$%.2f".format(proceeds),
-            trade.title[:50], open_trade.shares, sell_price, result, abs(pnl)
-        )
-
-        # En production : placer un ordre SELL réel
-        if self.config.is_production:
-            await self._execute_production_sell(open_trade, trade)
-
         return open_trade
 
-    async def _execute_production_sell(self, open_trade: "CopiedTrade", sell_signal: TargetTrade) -> None:
-        """Vente réelle sur Polymarket."""
+    async def _execute_production_sell(self, open_trade: "CopiedTrade", sell_signal: TargetTrade) -> bool:
+        """Vente réelle sur Polymarket. Retourne True si succès."""
         try:
             self._ensure_prod_client()
             from py_clob_client_v2 import MarketOrderArgs, OrderType, PartialCreateOrderOptions, Side
@@ -350,8 +355,10 @@ class CopyEngine:
                 logger.info("PROD SELL OK: %s | resp: %s", open_trade.target_trade.title[:40], resp)
             else:
                 logger.error("PROD SELL REJETÉ: %s | %s", open_trade.target_trade.title[:40], reason)
+            return success
         except Exception as e:
             logger.error("Prod sell échoué: %s", e)
+            return False
 
     # ── Exécution Demo ────────────────────────────────────────────────────────
 
