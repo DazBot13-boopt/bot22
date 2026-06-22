@@ -17,7 +17,7 @@ class Config:
 
     # ── Copy settings ───────────────────────────────────────────
     fixed_amount_per_trade: float = field(
-        default_factory=lambda: float(os.getenv("FIXED_AMOUNT_PER_TRADE", "5.0"))
+        default_factory=lambda: float(os.getenv("FIXED_AMOUNT_PER_TRADE", "0.01"))
     )
     max_daily_spend: float = field(
         default_factory=lambda: float(os.getenv("MAX_DAILY_SPEND", "100.0"))
