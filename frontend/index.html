@@ -264,21 +264,32 @@ tr:hover{background:rgba(59,130,246,.04);}
         <span class="refresh-note">Live</span>
       </div>
       <!-- Résumé BUY/SELL du trader -->
-      <div style="display:flex;gap:24px;padding:12px 18px;border-bottom:1px solid var(--border);background:rgba(59,130,246,.04);">
-        <div style="text-align:center">
-          <div style="font-size:11px;color:var(--dim);text-transform:uppercase">BUY</div>
-          <div style="font-size:22px;font-weight:700;color:var(--green)" id="traderBuyCount">0</div>
-          <div style="font-size:11px;color:var(--dim)" id="traderBuyUsdc">$0.00</div>
+      <div style="display:flex;gap:16px;padding:12px 18px;border-bottom:1px solid var(--border);background:rgba(59,130,246,.04);flex-wrap:wrap;">
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:10px;color:var(--dim);text-transform:uppercase">Trader BUY</div>
+          <div style="font-size:20px;font-weight:700;color:var(--green)" id="traderBuyCount">0</div>
+          <div style="font-size:10px;color:var(--dim)" id="traderBuyUsdc">$0.00</div>
         </div>
-        <div style="text-align:center">
-          <div style="font-size:11px;color:var(--dim);text-transform:uppercase">SELL</div>
-          <div style="font-size:22px;font-weight:700;color:var(--red)" id="traderSellCount">0</div>
-          <div style="font-size:11px;color:var(--dim)" id="traderSellUsdc">$0.00</div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:10px;color:var(--dim);text-transform:uppercase">Trader SELL</div>
+          <div style="font-size:20px;font-weight:700;color:var(--red)" id="traderSellCount">0</div>
+          <div style="font-size:10px;color:var(--dim)" id="traderSellUsdc">$0.00</div>
         </div>
-        <div style="text-align:center">
-          <div style="font-size:11px;color:var(--dim);text-transform:uppercase">PnL Visible</div>
-          <div style="font-size:22px;font-weight:700" id="traderPnl">$0.00</div>
-          <div style="font-size:11px;color:var(--dim)">50 derniers trades</div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:10px;color:var(--dim);text-transform:uppercase">PnL Trader</div>
+          <div style="font-size:20px;font-weight:700" id="traderPnl">$0.00</div>
+          <div style="font-size:10px;color:var(--dim)">50 derniers</div>
+        </div>
+        <div style="width:1px;background:var(--border)"></div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:10px;color:var(--dim);text-transform:uppercase">Bot BUY ✅</div>
+          <div style="font-size:20px;font-weight:700;color:var(--blue)" id="botBuyTotal">0</div>
+          <div style="font-size:10px;color:var(--dim)">depuis démarrage</div>
+        </div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:10px;color:var(--dim);text-transform:uppercase">Bot SELL ✅</div>
+          <div style="font-size:20px;font-weight:700;color:var(--purple)" id="botSellTotal">0</div>
+          <div style="font-size:10px;color:var(--dim)">depuis démarrage</div>
         </div>
       </div>
       <div class="panel-body">
@@ -493,8 +504,11 @@ async function fetchActivity() {
       const pnlEl = document.getElementById('traderPnl');
       pnlEl.textContent = (summary.pnl_visible >= 0 ? '+' : '') + fmt(summary.pnl_visible);
       pnlEl.className = summary.pnl_visible >= 0 ? 'positive' : 'negative';
-      pnlEl.style.fontSize = '22px';
-      pnlEl.style.fontWeight = '700';
+      pnlEl.style.fontSize = '20px'; pnlEl.style.fontWeight = '700';
+      if (summary.bot_buys_total !== undefined) {
+        document.getElementById('botBuyTotal').textContent = summary.bot_buys_total;
+        document.getElementById('botSellTotal').textContent = summary.bot_sells_total;
+      }
     }
     
     const body = document.getElementById('targetBody');

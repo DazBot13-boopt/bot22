@@ -242,13 +242,16 @@ async def get_pnl_history():
 @app.get("/api/target/activity", dependencies=AUTH)
 async def get_target_activity():
     trades = await monitor.fetch_recent_activity_dashboard(limit=50)
-    
-    # Compter BUY/SELL par trader
+
     buy_count = sum(1 for t in trades if t.side == "BUY")
     sell_count = sum(1 for t in trades if t.side == "SELL")
     total_buy_usdc = sum(t.usdc_size for t in trades if t.side == "BUY")
     total_sell_usdc = sum(t.usdc_size for t in trades if t.side == "SELL")
-    
+
+    # Stats cumulatives depuis le démarrage du bot (depuis les trades copiés)
+    bot_buys = sum(1 for t in engine.trades if t.copy_status.value == "COPIED")
+    bot_sells = sum(1 for t in engine.trades if t.sold_early)
+
     return JSONResponse({
         "trades": [
             {
@@ -270,6 +273,8 @@ async def get_target_activity():
             "total_buy_usdc": round(total_buy_usdc, 4),
             "total_sell_usdc": round(total_sell_usdc, 4),
             "pnl_visible": round(total_sell_usdc - total_buy_usdc, 4),
+            "bot_buys_total": bot_buys,
+            "bot_sells_total": bot_sells,
         }
     })
 
