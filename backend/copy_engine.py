@@ -93,175 +93,80 @@ class CopyEngine:
 
     async def handle_trade(self, trade: TargetTrade) -> CopiedTrade:
         """
-        Plan 2 : Décision de copie avec tous les filtres.
+        Mirror trading pur — copie chaque BUY et chaque SELL du trader,
+        avec le montant fixe configuré. Aucun filtre catégorie/conviction.
+        Seules limites : délai max, budget journalier, limite hebdo.
         """
         self._reset_daily_if_needed()
         self._reset_weekly_if_needed()
         now = time.time()
 
-        # ── Filtre 1 : délai ──────────────────────────────────────────────────
+        # ── Filtre délai ──────────────────────────────────────────────────────
         delay = now - trade.timestamp
         if delay > self.config.max_copy_delay_seconds:
             ct = self._skip(trade, CopyStatus.SKIPPED_TOO_LATE, f"Délai: {delay:.0f}s")
             self.trades.append(ct)
             return ct
 
-        # ── Filtre 2 : catégorie de prédilection du trader ────────────────────
-        profile = self.traders_db.get(trade.trader_wallet)
-        if profile:
-            if profile.specialty:
-                if trade.market_category != profile.specialty:
-                    ct = self._skip(trade, CopyStatus.SKIPPED_CATEGORY,
-                        f"Hors spécialité: trader={profile.specialty}, marché={trade.market_category}")
-                    self.trades.append(ct)
-                    return ct
-            elif self.config.target_categories:
-                if trade.market_category not in self.config.target_categories:
-                    ct = self._skip(trade, CopyStatus.SKIPPED_CATEGORY,
-                        f"Catégorie '{trade.market_category}' ∉ cibles {self.config.target_categories}")
-                    self.trades.append(ct)
-                    return ct
-
-        # ── Mise à jour tracker marché ────────────────────────────────────────
+        # ── Tracker marché (pour la vente) ────────────────────────────────────
         wallet = trade.trader_wallet
         if wallet not in self._market_trackers:
             self._market_trackers[wallet] = {}
-
         cid = trade.condition_id
         tracker_map = self._market_trackers[wallet]
-
         if cid not in tracker_map:
             tracker_map[cid] = {
-                "Up": 0.0, "Down": 0.0,
-                "Up_shares": 0.0, "Down_shares": 0.0,
                 "copied_side": None,
-                "dominant_side": None,
                 "title": trade.title,
                 "category": trade.market_category,
-                "first_seen": now,
-                "trade_count": 0,
                 "asset": trade.asset,
                 "slug": trade.slug,
-                "total_usdc": 0.0,
             }
-
         tracker = tracker_map[cid]
-        tracker["trade_count"] += 1
-        outcome = trade.outcome
 
-        # ── SELL : vendre notre position si on en a une ───────────────────────
+        # ── SELL → vendre notre position ──────────────────────────────────────
         if trade.side == "SELL":
             sold = await self._handle_sell(trade, cid, tracker, now)
             if sold:
                 return sold
-            # Pas de position à vendre → ignorer silencieusement
             ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, "SELL — pas de position ouverte")
             self.trades.append(ct)
             return ct
 
-        # Normalise Yes/No → Up/Down
-        if outcome in ("Up", "Down", "Yes", "No"):
-            side = "Up" if outcome in ("Up", "Yes") else "Down"
-            tracker[side] += trade.usdc_size
-            tracker[f"{side}_shares"] += trade.size
-            tracker["total_usdc"] += trade.usdc_size
+        # ── BUY → copier immédiatement ────────────────────────────────────────
 
-        up_usdc = tracker["Up"]
-        down_usdc = tracker["Down"]
-        total_usdc = up_usdc + down_usdc
-        dominant_side = "Down" if down_usdc > up_usdc else "Up"
-        dominant_pct = max(up_usdc, down_usdc) / total_usdc if total_usdc > 0 else 0
-        tracker["dominant_side"] = dominant_side
-
-        # ── Filtre 3 : ce marché a déjà été copié par ce trader ──────────────
-        if tracker["copied_side"] is not None:
-            ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, f"Déjà bet {tracker['copied_side']} sur ce marché")
-            self.trades.append(ct)
-            return ct
-
-        # ── Filtre 4 : seuil USDC minimum ────────────────────────────────────
-        if total_usdc < self.config.min_total_usdc:
-            ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, f"Attente: ${total_usdc:.2f}/${self.config.min_total_usdc:.0f} USDC")
-            self.trades.append(ct)
-            return ct
-
-        # ── Filtre 5 : conviction minimum ────────────────────────────────────
-        if dominant_pct < self.config.min_conviction_pct:
-            ct = self._skip(trade, CopyStatus.SKIPPED_CONVICTION, f"Conviction: {dominant_pct:.0%} < {self.config.min_conviction_pct:.0%}")
-            self.trades.append(ct)
-            return ct
-
-        # ── Signal multi-traders ──────────────────────────────────────────────
-        traders_aligned = self.traders_db.count_aligned_traders(
-            cid, dominant_side, self._market_trackers
-        )
-
-        # ── Filtre 6 : budget journalier ──────────────────────────────────────
+        # Budget journalier
         amount = self._calculate_copy_amount()
         if self._daily_spend + amount > self.config.max_daily_spend:
-            copied = self._make_copied(trade, CopyStatus.SKIPPED_BUDGET,
-                                       reason="Budget journalier dépassé")
-            self.trades.append(copied)
-            return copied
+            ct = self._make_copied(trade, CopyStatus.SKIPPED_BUDGET, reason="Budget journalier dépassé")
+            self.trades.append(ct)
+            return ct
 
-        # ── Filtre 7 : limite hebdomadaire ────────────────────────────────────
+        # Limite hebdomadaire
         if self._weekly_copies >= self.config.max_weekly_trades:
-            copied = self._make_copied(trade, CopyStatus.SKIPPED_WEEKLY_LIMIT,
-                                       reason=f"Limite hebdo: {self._weekly_copies}/{self.config.max_weekly_trades}")
-            self.trades.append(copied)
-            return copied
-
-        # ── TRADE VALIDÉ ──────────────────────────────────────────────────────
-        dom_usdc = tracker[dominant_side]
-        dom_shares = tracker[f"{dominant_side}_shares"]
-        avg_price = dom_usdc / dom_shares if dom_shares > 0 else trade.price
-
-        signal_info = ""
-        if self.config.multi_trader_bonus and traders_aligned > 0:
-            signal_info = f" | {traders_aligned} autre(s) trader(s) alignés 🔥"
+            ct = self._make_copied(trade, CopyStatus.SKIPPED_WEEKLY_LIMIT,
+                                   reason=f"Limite hebdo: {self._weekly_copies}/{self.config.max_weekly_trades}")
+            self.trades.append(ct)
+            return ct
 
         logger.info(
-            "✅ COPIE VALIDÉE: %s %s | Up=$%.0f vs Down=$%.0f | Conviction=%.0f%% | "
-            "Trader=%s (%s)%s",
-            dominant_side, trade.title[:50],
-            up_usdc, down_usdc, dominant_pct * 100,
-            trade.trader_username, trade.market_category,
-            signal_info,
-        )
-
-        dominant_trade = TargetTrade(
-            timestamp=trade.timestamp,
-            condition_id=cid,
-            trade_type="TRADE",
-            size=trade.size,
-            usdc_size=trade.usdc_size,
-            price=avg_price,
-            asset=tracker["asset"],
-            side="BUY",
-            outcome_index=0 if dominant_side == "Up" else 1,
-            title=trade.title,
-            slug=tracker["slug"],
-            outcome=dominant_side,
-            tx_hash=trade.tx_hash,
-            trader_wallet=wallet,
-            trader_username=trade.trader_username,
-            market_category=trade.market_category,
+            "✅ MIRROR BUY: %s %s @ %.4f | Trader=%s | $%.2f",
+            trade.outcome, trade.title[:45], trade.price,
+            trade.trader_username, amount,
         )
 
         if self.config.is_production:
-            copied = await self._execute_production(dominant_trade, amount)
+            copied = await self._execute_production(trade, amount)
         else:
-            copied = self._execute_demo(dominant_trade, amount)
+            copied = self._execute_demo(trade, amount)
 
-        # Enrichit le trade copié avec le contexte de décision
-        copied.conviction_pct = dominant_pct
-        copied.traders_aligned = traders_aligned
+        profile = self.traders_db.get(wallet)
         copied.trader_wallet = wallet
         copied.trader_username = trade.trader_username
         copied.trader_specialty = profile.specialty if profile else ""
 
         if copied.copy_status == CopyStatus.COPIED:
-            tracker["copied_side"] = dominant_side
+            tracker["copied_side"] = trade.outcome
             self._weekly_copies += 1
 
         self.trades.append(copied)
