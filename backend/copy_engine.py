@@ -4,7 +4,9 @@ Ce module gère la logique de copie des trades détectés.
 Il reproduit fidèlement les BUY et SELL sans filtres de conviction.
 """
 
+import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -18,6 +20,8 @@ from backend.models import (
 from backend.traders_db import TradersDB
 
 logger = logging.getLogger(__name__)
+
+TRADES_FILE = os.getenv("TRADES_FILE", "trades_state.json")
 
 
 class CopyEngine:
@@ -41,6 +45,139 @@ class CopyEngine:
         # Production client (lazy init)
         self._prod_client = None
         self._tick_size_cache: dict[str, str] = {}
+
+        # Charger l'état persisté
+        self._load_state()
+
+    # ── Persistance ────────────────────────────────────────────────────────────
+
+    def _save_state(self) -> None:
+        """Sauvegarde trades + wallet démo sur disque."""
+        try:
+            trades_data = []
+            for t in self.trades:
+                tt = t.target_trade
+                trades_data.append({
+                    "id": t.id,
+                    "copy_status": t.copy_status.value,
+                    "copy_timestamp": t.copy_timestamp,
+                    "amount_usdc": t.amount_usdc,
+                    "shares": t.shares,
+                    "price": t.price,
+                    "pnl": t.pnl,
+                    "resolved": t.resolved,
+                    "won": t.won,
+                    "reason": t.reason,
+                    "sold_early": t.sold_early,
+                    "sell_price": t.sell_price,
+                    "sell_timestamp": t.sell_timestamp,
+                    "conviction_pct": t.conviction_pct,
+                    "traders_aligned": t.traders_aligned,
+                    "trader_wallet": t.trader_wallet,
+                    "trader_username": t.trader_username,
+                    "trader_specialty": t.trader_specialty,
+                    # TargetTrade fields
+                    "tt_timestamp": tt.timestamp,
+                    "tt_condition_id": tt.condition_id,
+                    "tt_trade_type": tt.trade_type,
+                    "tt_size": tt.size,
+                    "tt_usdc_size": tt.usdc_size,
+                    "tt_price": tt.price,
+                    "tt_asset": tt.asset,
+                    "tt_side": tt.side,
+                    "tt_outcome_index": tt.outcome_index,
+                    "tt_title": tt.title,
+                    "tt_slug": tt.slug,
+                    "tt_outcome": tt.outcome,
+                    "tt_tx_hash": tt.tx_hash,
+                    "tt_market_category": tt.market_category,
+                    "tt_trader_wallet": tt.trader_wallet,
+                    "tt_trader_username": tt.trader_username,
+                })
+
+            state = {
+                "trade_counter": self._trade_counter,
+                "daily_spend": self._daily_spend,
+                "daily_reset_date": self._daily_reset_date,
+                "weekly_copies": self._weekly_copies,
+                "weekly_reset_date": self._weekly_reset_date,
+                "demo_balance": self.demo_wallet.balance,
+                "demo_total_invested": self.demo_wallet.total_invested,
+                "demo_total_returned": self.demo_wallet.total_returned,
+                "demo_positions": self.demo_wallet.positions,
+                "trades": trades_data,
+            }
+            with open(TRADES_FILE, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.warning("Impossible de sauvegarder l'état: %s", e)
+
+    def _load_state(self) -> None:
+        """Recharge l'état depuis le fichier persisté."""
+        if not os.path.exists(TRADES_FILE):
+            return
+        try:
+            with open(TRADES_FILE) as f:
+                state = json.load(f)
+
+            self._trade_counter = state.get("trade_counter", 0)
+            self._daily_spend = state.get("daily_spend", 0.0)
+            self._daily_reset_date = state.get("daily_reset_date", "")
+            self._weekly_copies = state.get("weekly_copies", 0)
+            self._weekly_reset_date = state.get("weekly_reset_date", "")
+            self.demo_wallet.balance = state.get("demo_balance", self.config.demo_initial_balance)
+            self.demo_wallet.total_invested = state.get("demo_total_invested", 0.0)
+            self.demo_wallet.total_returned = state.get("demo_total_returned", 0.0)
+            self.demo_wallet.positions = state.get("demo_positions", {})
+
+            for td in state.get("trades", []):
+                tt = TargetTrade(
+                    timestamp=td["tt_timestamp"],
+                    condition_id=td["tt_condition_id"],
+                    trade_type=td["tt_trade_type"],
+                    size=td["tt_size"],
+                    usdc_size=td["tt_usdc_size"],
+                    price=td["tt_price"],
+                    asset=td["tt_asset"],
+                    side=td["tt_side"],
+                    outcome_index=td["tt_outcome_index"],
+                    title=td["tt_title"],
+                    slug=td["tt_slug"],
+                    outcome=td["tt_outcome"],
+                    tx_hash=td["tt_tx_hash"],
+                    market_category=td.get("tt_market_category", ""),
+                    trader_wallet=td.get("tt_trader_wallet", ""),
+                    trader_username=td.get("tt_trader_username", ""),
+                )
+                ct = CopiedTrade(
+                    id=td["id"],
+                    target_trade=tt,
+                    copy_status=CopyStatus(td["copy_status"]),
+                    copy_timestamp=td["copy_timestamp"],
+                    amount_usdc=td["amount_usdc"],
+                    shares=td["shares"],
+                    price=td["price"],
+                    pnl=td["pnl"],
+                    resolved=td["resolved"],
+                    won=td["won"],
+                    reason=td["reason"],
+                    sold_early=td.get("sold_early", False),
+                    sell_price=td.get("sell_price", 0.0),
+                    sell_timestamp=td.get("sell_timestamp", 0.0),
+                    conviction_pct=td.get("conviction_pct", 0.0),
+                    traders_aligned=td.get("traders_aligned", 0),
+                    trader_wallet=td.get("trader_wallet", ""),
+                    trader_username=td.get("trader_username", ""),
+                    trader_specialty=td.get("trader_specialty", ""),
+                )
+                self.trades.append(ct)
+
+            logger.info(
+                "État rechargé: %d trades, balance=%.2f$, daily_spend=%.2f$",
+                len(self.trades), self.demo_wallet.balance, self._daily_spend
+            )
+        except Exception as e:
+            logger.warning("Impossible de charger l'état: %s — on repart de zéro", e)
 
     def _reset_daily_if_needed(self) -> None:
         today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
@@ -78,6 +215,7 @@ class CopyEngine:
             logger.warning(f"Trade ignoré (trop vieux: {delay:.0f}s): {trade.title}")
             ct = self._skip(trade, CopyStatus.SKIPPED_TOO_LATE, f"Délai: {delay:.0f}s")
             self.trades.append(ct)
+            self._save_state()
             return ct
 
         # 2. Gestion des SELL (Vendre notre position si on en a une)
@@ -87,6 +225,7 @@ class CopyEngine:
                 return sold
             ct = self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, "SELL - Pas de position ouverte à fermer")
             self.trades.append(ct)
+            self._save_state()
             return ct
 
         # 3. Gestion des BUY (Ouvrir une position)
@@ -96,6 +235,7 @@ class CopyEngine:
                 ct = self._skip(trade, CopyStatus.SKIPPED_CATEGORY,
                                 f"Catégorie {trade.market_category!r} hors cible {self.config.target_categories}")
                 self.trades.append(ct)
+                self._save_state()
                 return ct
 
             # Vérification des limites de budget
@@ -103,11 +243,13 @@ class CopyEngine:
             if self._daily_spend + amount > self.config.max_daily_spend:
                 ct = self._skip(trade, CopyStatus.SKIPPED_BUDGET, "Budget journalier dépassé")
                 self.trades.append(ct)
+                self._save_state()
                 return ct
 
             if self._weekly_copies >= self.config.max_weekly_trades:
                 ct = self._skip(trade, CopyStatus.SKIPPED_WEEKLY_LIMIT, "Limite hebdomadaire atteinte")
                 self.trades.append(ct)
+                self._save_state()
                 return ct
 
             logger.info(f"🚀 COPIE BUY: {trade.outcome} {trade.title} @ {trade.price}")
@@ -123,9 +265,11 @@ class CopyEngine:
             if copied.copy_status == CopyStatus.COPIED:
                 self._weekly_copies += 1
                 self.trades.append(copied)
+                self._save_state()
                 return copied
-            
+
             self.trades.append(copied)
+            self._save_state()
             return copied
 
         return self._skip(trade, CopyStatus.SKIPPED_NON_TRADE, f"Type de trade non géré: {trade.side}")
@@ -176,6 +320,7 @@ class CopyEngine:
             if pos_key in self.demo_wallet.positions:
                 self.demo_wallet.positions[pos_key]["shares"] = 0
 
+        self._save_state()
         return open_trade
 
     def _execute_demo(self, trade: TargetTrade, amount: float) -> CopiedTrade:
@@ -307,6 +452,7 @@ class CopyEngine:
                 t.pnl = (t.shares if t.won else 0) - t.amount_usdc
                 if not self.config.is_production and t.won:
                     self.demo_wallet.balance += t.shares
+        self._save_state()
 
     def get_stats(self):
         copied = [t for t in self.trades if t.copy_status == CopyStatus.COPIED]

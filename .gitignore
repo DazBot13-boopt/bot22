@@ -4,6 +4,9 @@
 # Config runtime (sauvegardée par le dashboard)
 config_override.json
 
+# État runtime du bot (trades, balance)
+trades_state.json
+
 # Python
 __pycache__/
 *.pyc
