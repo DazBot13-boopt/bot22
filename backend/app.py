@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import secrets
 import time
 
@@ -141,7 +142,6 @@ class BotController:
 
 bot = BotController()
 
-
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
@@ -158,6 +158,11 @@ async def startup() -> None:
     for t in traders:
         logger.info("  → %s (%s) | spécialité: %s | WR: %.0f%%",
                     t.username, t.wallet[:10], t.specialty, t.win_rate)
+
+    # Auto-démarrage : le bot repart tout seul après un redémarrage du serveur
+    if os.getenv("AUTO_START", "true").lower() == "true":
+        result = await bot.start()
+        logger.info("Auto-start: %s", result["status"])
 
 
 @app.on_event("shutdown")

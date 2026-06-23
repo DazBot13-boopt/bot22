@@ -325,7 +325,7 @@ tr:hover{background:rgba(59,130,246,.04);}
 </div><!-- /container -->
 
 <script>
-const REFRESH_MS = 3000;
+const REFRESH_MS = 10000; // refresh toutes les 10s pour ne pas spammer l'API
 const BASE = window.location.protocol + '//' + window.location.host;
 const api = (path, opts) => fetch(BASE + path, opts);
 const fmt = (n, d=2) => '$' + Number(n).toFixed(d);
