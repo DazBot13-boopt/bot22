@@ -1,6 +1,9 @@
 # Secrets — NE JAMAIS committer
 .env
 
+# Config runtime (sauvegardée par le dashboard)
+config_override.json
+
 # Python
 __pycache__/
 *.pyc

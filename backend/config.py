@@ -1,72 +1,99 @@
+import json
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
 
+CONFIG_FILE = os.getenv("CONFIG_FILE", "config_override.json")
+
+
+def _load_override() -> dict:
+    """Charge les surcharges sauvegardées par le dashboard."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_override(data: dict) -> None:
+    """Persiste les surcharges sur disque."""
+    try:
+        existing = _load_override()
+        existing.update(data)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(existing, f, indent=2)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Impossible de sauvegarder config: %s", e)
+
+
+_override = _load_override()
+
+
+def _get(key: str, default: str) -> str:
+    """Priorité: fichier override > variable d'env > valeur par défaut."""
+    if key in _override:
+        return str(_override[key])
+    return os.getenv(key, default)
+
 
 @dataclass
 class Config:
     # ── Bot mode ────────────────────────────────────────────────
-    mode: str = field(default_factory=lambda: os.getenv("MODE", "demo"))
+    mode: str = field(default_factory=lambda: _get("MODE", "demo"))
 
     # ── Demo settings ───────────────────────────────────────────
     demo_initial_balance: float = field(
-        default_factory=lambda: float(os.getenv("DEMO_INITIAL_BALANCE", "500.0"))
+        default_factory=lambda: float(_get("DEMO_INITIAL_BALANCE", "500.0"))
     )
 
     # ── Copy settings ───────────────────────────────────────────
     fixed_amount_per_trade: float = field(
-        default_factory=lambda: float(os.getenv("FIXED_AMOUNT_PER_TRADE", "0.01"))
+        default_factory=lambda: float(_get("FIXED_AMOUNT_PER_TRADE", "0.01"))
     )
     max_daily_spend: float = field(
-        default_factory=lambda: float(os.getenv("MAX_DAILY_SPEND", "100.0"))
+        default_factory=lambda: float(_get("MAX_DAILY_SPEND", "100.0"))
     )
     max_weekly_trades: int = field(
-        default_factory=lambda: int(os.getenv("MAX_WEEKLY_TRADES", "10"))
+        default_factory=lambda: int(_get("MAX_WEEKLY_TRADES", "10"))
     )
     max_copy_delay_seconds: int = field(
-        default_factory=lambda: int(os.getenv("MAX_COPY_DELAY_SECONDS", "60"))
+        default_factory=lambda: int(_get("MAX_COPY_DELAY_SECONDS", "60"))
     )
     poll_interval_seconds: int = field(
-        default_factory=lambda: int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
+        default_factory=lambda: int(_get("POLL_INTERVAL_SECONDS", "5"))
     )
 
     # ── Risk management ─────────────────────────────────────────
-    # Sécurisation des gains : si le PnL réalisé dépasse ce seuil,
-    # on réduit le montant par trade pour ne plus risquer les gains.
     profit_lock_threshold: float = field(
-        default_factory=lambda: float(os.getenv("PROFIT_LOCK_THRESHOLD", "50.0"))
+        default_factory=lambda: float(_get("PROFIT_LOCK_THRESHOLD", "50.0"))
     )
-    # Montant réduit (% du fixed_amount) quand les gains sont sécurisés
     profit_lock_ratio: float = field(
-        default_factory=lambda: float(os.getenv("PROFIT_LOCK_RATIO", "0.5"))
+        default_factory=lambda: float(_get("PROFIT_LOCK_RATIO", "0.5"))
     )
 
     # ── Copy signal thresholds ─────────────────────────────────
-    # Minimum USDC total investi par le trader avant de copier
-    # Mettre bas (ex: 2.0) pour les petits traders, haut (ex: 150) pour les baleines
     min_total_usdc: float = field(
-        default_factory=lambda: float(os.getenv("MIN_TOTAL_USDC", "1.0"))
-    )    # Conviction minimum (% dominant side)
+        default_factory=lambda: float(_get("MIN_TOTAL_USDC", "1.0"))
+    )
     min_conviction_pct: float = field(
-        default_factory=lambda: float(os.getenv("MIN_CONVICTION_PCT", "0.65"))
+        default_factory=lambda: float(_get("MIN_CONVICTION_PCT", "0.65"))
     )
-    # % minimum du capital du trader alloué sur ce marché pour copier
     min_capital_pct: float = field(
-        default_factory=lambda: float(os.getenv("MIN_CAPITAL_PCT", "0.0"))
+        default_factory=lambda: float(_get("MIN_CAPITAL_PCT", "0.0"))
     )
-    # Bonus de signal : nb de traders experts qui ont la même position
     multi_trader_bonus: bool = field(
-        default_factory=lambda: os.getenv("MULTI_TRADER_BONUS", "true").lower() == "true"
+        default_factory=lambda: _get("MULTI_TRADER_BONUS", "true").lower() == "true"
     )
 
     # ── Catégorie cible ─────────────────────────────────────────
-    # Ne copier que les trades dans ces catégories de marché
-    # Laisser vide = copier toutes catégories
     target_categories: list = field(
         default_factory=lambda: [
-            c.strip() for c in os.getenv("TARGET_CATEGORIES", "Finance").split(",")
+            c.strip() for c in _get("TARGET_CATEGORIES", "Finance").split(",")
             if c.strip()
         ]
     )
@@ -91,6 +118,30 @@ class Config:
     clob_api_url: str = "https://clob.polymarket.com"
     gamma_api_url: str = "https://gamma-api.polymarket.com"
     chain_id: int = 137
+
+    def save(self, data: dict) -> None:
+        """Applique et persiste une mise à jour de config depuis le dashboard."""
+        mapping = {
+            "mode": ("mode", str),
+            "fixed_amount_per_trade": ("fixed_amount_per_trade", float),
+            "max_daily_spend": ("max_daily_spend", float),
+            "max_weekly_trades": ("max_weekly_trades", int),
+            "poll_interval_seconds": ("poll_interval_seconds", int),
+            "max_copy_delay_seconds": ("max_copy_delay_seconds", int),
+            "min_total_usdc": ("min_total_usdc", float),
+            "min_conviction_pct": ("min_conviction_pct", float),
+            "profit_lock_threshold": ("profit_lock_threshold", float),
+            "profit_lock_ratio": ("profit_lock_ratio", float),
+            "target_categories": ("target_categories", list),
+        }
+        to_save = {}
+        for key, (attr, cast) in mapping.items():
+            if key in data:
+                val = data[key] if cast is list else cast(data[key])
+                setattr(self, attr, val)
+                # Stocker avec clé ENV pour cohérence
+                to_save[key] = val
+        _save_override(to_save)
 
     @property
     def is_production(self) -> bool:

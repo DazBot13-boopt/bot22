@@ -302,29 +302,8 @@ async def get_config():
 @app.post("/api/config", dependencies=AUTH)
 async def update_config(request: Request):
     data = await request.json()
-    if "mode" in data:
-        config.mode = data["mode"]
-    if "fixed_amount_per_trade" in data:
-        config.fixed_amount_per_trade = float(data["fixed_amount_per_trade"])
-    if "max_daily_spend" in data:
-        config.max_daily_spend = float(data["max_daily_spend"])
-    if "max_weekly_trades" in data:
-        config.max_weekly_trades = int(data["max_weekly_trades"])
-    if "poll_interval_seconds" in data:
-        config.poll_interval_seconds = int(data["poll_interval_seconds"])
-    if "max_copy_delay_seconds" in data:
-        config.max_copy_delay_seconds = int(data["max_copy_delay_seconds"])
-    if "min_total_usdc" in data:
-        config.min_total_usdc = float(data["min_total_usdc"])
-    if "min_conviction_pct" in data:
-        config.min_conviction_pct = float(data["min_conviction_pct"])
-    if "profit_lock_threshold" in data:
-        config.profit_lock_threshold = float(data["profit_lock_threshold"])
-    if "profit_lock_ratio" in data:
-        config.profit_lock_ratio = float(data["profit_lock_ratio"])
-    if "target_categories" in data:
-        config.target_categories = data["target_categories"]
-    logger.info("Config mise à jour: %s", data)
+    config.save(data)
+    logger.info("Config mise à jour et sauvegardée: %s", data)
     return JSONResponse({"status": "ok"})
 
 
