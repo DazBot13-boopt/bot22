@@ -93,7 +93,7 @@ class Config:
     # ── Catégorie cible ─────────────────────────────────────────
     target_categories: list = field(
         default_factory=lambda: [
-            c.strip() for c in _get("TARGET_CATEGORIES", "Finance").split(",")
+            c.strip() for c in _get("TARGET_CATEGORIES", "").split(",")
             if c.strip()
         ]
     )
