@@ -1,13 +1,12 @@
 """
-Monitore l'activité de PLUSIEURS traders cibles sur Polymarket.
-Chaque trader est surveillé indépendamment via polling.
+Monitor d'activité Polymarket
+Surveille les mouvements des traders configurés via l'API Data de Polymarket.
 """
 
 import asyncio
 import logging
 import time
 from collections.abc import Callable
-
 import httpx
 
 from backend.config import Config
@@ -16,53 +15,6 @@ from backend.traders_db import TradersDB
 
 logger = logging.getLogger(__name__)
 
-# Catégories connues de Polymarket (mots-clés dans le titre du marché)
-CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "Finance": [
-        "bitcoin", "btc", "eth", "ethereum", "crypto", "fed", "interest rate",
-        "inflation", "gdp", "s&p", "nasdaq", "dow", "stock", "dollar", "eur",
-        "gold", "silver", "oil", "crude", "commodit", "treasury", "yield", "bond",
-        "market", "economy", "recession", "cpi", "fomc", "rate cut", "rate hike",
-        "price", "usd", "gbp", "jpy", "yen", "hit", "reach", "dip", "high", "low",
-        "anthropic", "openai", "valuation", "market cap", "ipo",
-        "solana", "sol", "xrp", "ripple", "bnb", "altcoin",
-    ],
-    "Politics": [
-        "election", "president", "senate", "house", "congress", "vote",
-        "trump", "biden", "harris", "democrat", "republican", "poll",
-        "approval", "party", "candidate", "primary", "debate",
-    ],
-    "Sports": [
-        "nfl", "nba", "mlb", "nhl", "soccer", "football", "basketball",
-        "baseball", "tennis", "golf", "ufc", "mma", "champion", "super bowl",
-        "world cup", "playoff", "game", "match", "tournament",
-    ],
-    "Crypto": [
-        "bitcoin", "btc", "eth", "ethereum", "solana", "sol", "xrp", "ripple",
-        "bnb", "usdc", "defi", "nft", "blockchain", "altcoin", "memecoin",
-        "doge", "shib", "polygon", "matic", "chainlink",
-    ],
-    "World": [
-        "war", "ukraine", "russia", "china", "taiwan", "middle east",
-        "nato", "un ", "united nations", "ceasefire", "sanction",
-        "nuclear", "conflict", "treaty", "summit",
-    ],
-}
-
-
-def detect_category(title: str) -> str:
-    """Détecte la catégorie d'un marché à partir de son titre."""
-    title_lower = title.lower()
-    scores: dict[str, int] = {}
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in title_lower)
-        if score > 0:
-            scores[category] = score
-    if not scores:
-        return "Other"
-    return max(scores, key=lambda k: scores[k])
-
-
 class TradeMonitor:
     def __init__(self, config: Config, traders_db: TradersDB):
         self.config = config
@@ -70,19 +22,14 @@ class TradeMonitor:
         self._callbacks: list[Callable] = []
         self._running = False
         self._client = httpx.AsyncClient(timeout=15.0)
+        
+        self._last_seen_ts: dict[str, int] = {}
+        self._seen_txs: dict[str, set[str]] = {}
 
-        # Par trader : dernier timestamp et hashes vus
-        self._last_seen: dict[str, int] = {}   # wallet -> timestamp
-        self._seen_hashes: dict[str, set[str]] = {}  # wallet -> set of tx_hash
-
-    def on_new_trade(self, callback: Callable) -> None:
+    def on_new_trade(self, callback: Callable):
         self._callbacks.append(callback)
 
-    # ── Fetch activity pour UN trader ────────────────────────────────────────
-
-    async def fetch_recent_activity(
-        self, wallet: str, limit: int = 50
-    ) -> list[TargetTrade]:
+    async def fetch_recent_activity(self, wallet: str, limit: int = 20) -> list[TargetTrade]:
         url = f"{self.config.data_api_url}/activity"
         params = {
             "user": wallet,
@@ -96,7 +43,7 @@ class TradeMonitor:
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            logger.error("Fetch activity [%s]: %s", wallet[:10], e)
+            logger.error(f"Erreur fetch activity pour {wallet}: {e}")
             return []
 
         profile = self.traders_db.get(wallet)
@@ -104,9 +51,7 @@ class TradeMonitor:
 
         trades = []
         for item in data:
-            title = item.get("title", "")
-            category = detect_category(title)
-            trade = TargetTrade(
+            trades.append(TargetTrade(
                 timestamp=item.get("timestamp", 0),
                 condition_id=item.get("conditionId", ""),
                 trade_type=item.get("type", "TRADE"),
@@ -116,152 +61,108 @@ class TradeMonitor:
                 asset=item.get("asset", ""),
                 side=item.get("side", "BUY"),
                 outcome_index=int(item.get("outcomeIndex", 0)),
-                title=title,
+                title=item.get("title", ""),
                 slug=item.get("slug", ""),
                 outcome=item.get("outcome", ""),
                 tx_hash=item.get("transactionHash", ""),
                 trader_wallet=wallet,
                 trader_username=username,
-                market_category=category,
-            )
-            trades.append(trade)
+                market_category=self._infer_category(item.get("slug", ""), item.get("title", "")),
+            ))
         return trades
 
-    # ── Activité récente du 1er trader (pour le dashboard) ───────────────────
+    @staticmethod
+    def _infer_category(slug: str, title: str) -> str:
+        """Déduit la catégorie d'un marché depuis son slug ou titre."""
+        text = (slug + " " + title).lower()
+        if any(k in text for k in ("btc", "bitcoin", "eth", "ethereum", "crypto", "xrp", "sol", "bnb", "doge", "coin")):
+            return "Crypto"
+        if any(k in text for k in ("election", "president", "vote", "congress", "senate", "democrat", "republican", "trump", "biden", "macron", "parti")):
+            return "Politics"
+        if any(k in text for k in ("nba", "nfl", "soccer", "football", "tennis", "sport", "league", "champion", "world cup", "fifa", "nhl", "mlb")):
+            return "Sports"
+        if any(k in text for k in ("oil", "gold", "silver", "nasdaq", "s&p", "dow", "rate", "fed", "gdp", "inflation", "crude", "wti", "stock", "market", "interest")):
+            return "Finance"
+        return "Other"
 
-    async def fetch_recent_activity_dashboard(self, limit: int = 20) -> list[TargetTrade]:
-        """Retourne l'activité récente du premier trader actif (pour le dashboard)."""
-        wallets = self.traders_db.all_wallets()
-        if not wallets:
-            return []
-        return await self.fetch_recent_activity(wallets[0], limit)
+    async def _poll_trader(self, wallet: str):
+        trades = await self.fetch_recent_activity(wallet)
+        if not trades: return
 
-    # ── Polling d'UN trader ───────────────────────────────────────────────────
+        last_ts = self._last_seen_ts.get(wallet, 0)
+        seen = self._seen_txs.setdefault(wallet, set())
 
-    async def _poll_trader(self, wallet: str) -> None:
-        trades = await self.fetch_recent_activity(wallet, limit=50)
-        last_ts = self._last_seen.get(wallet, 0)
-        seen = self._seen_hashes.setdefault(wallet, set())
+        # Si wallet jamais initialisé (ajouté pendant que le bot tourne),
+        # on considère le trade le plus récent comme point de départ
+        if wallet not in self._last_seen_ts:
+            self._last_seen_ts[wallet] = trades[0].timestamp
+            seen.add(trades[0].tx_hash)
+            logger.info(f"Nouveau wallet initialisé: {wallet[:12]}... | point de départ ts={trades[0].timestamp}")
+            return
 
-        new_trades = []
-        for trade in trades:
-            if trade.tx_hash in seen:
-                continue
-            if trade.timestamp <= last_ts:
-                continue
-            new_trades.append(trade)
+        # On traite du plus vieux au plus récent
+        new_trades = [t for t in trades if t.timestamp > last_ts and t.tx_hash not in seen]
+        new_trades.sort(key=lambda x: x.timestamp)
+
+        for trade in new_trades:
+            logger.info(f"🔔 [{trade.trader_username}] {trade.side} {trade.outcome} | {trade.title[:50]} | {trade.usdc_size:.2f} USDC")
+            for cb in self._callbacks:
+                try:
+                    await cb(trade)
+                except Exception as e:
+                    logger.error(f"Erreur callback: {e}")
+
             seen.add(trade.tx_hash)
+            self._last_seen_ts[wallet] = max(self._last_seen_ts.get(wallet, 0), trade.timestamp)
 
-        if new_trades:
-            new_trades.sort(key=lambda t: t.timestamp)
-            for trade in new_trades:
-                self._last_seen[wallet] = max(
-                    self._last_seen.get(wallet, 0), trade.timestamp
-                )
-                profile = self.traders_db.get(wallet)
-                logger.info(
-                    "[%s/%s] Nouveau trade: %s %s @ %.4f ($%.2f) [%s]",
-                    trade.trader_username,
-                    trade.market_category,
-                    trade.side,
-                    trade.outcome,
-                    trade.price,
-                    trade.usdc_size,
-                    trade.title[:50],
-                )
-                for cb in self._callbacks:
-                    try:
-                        await cb(trade)
-                    except Exception as e:
-                        logger.error("Callback error: %s", e)
+        # Nettoyage mémoire
+        if len(seen) > 1000:
+            self._seen_txs[wallet] = set(list(seen)[-500:])
 
-        # Keep seen set manageable
-        if len(seen) > 5000:
-            self._seen_hashes[wallet] = set(list(seen)[-2000:])
-
-    # ── Démarrage du monitoring ───────────────────────────────────────────────
-
-    async def start(self) -> None:
+    async def start(self):
         self._running = True
-        # Reset complet à chaque démarrage
-        self._last_seen.clear()
-        self._seen_hashes.clear()
+        logger.info("Démarrage du monitoring d'activité...")
+        
+        # Initialisation : on marque les trades actuels comme vus pour ne pas copier le passé
         wallets = self.traders_db.all_wallets()
-        logger.info("Monitoring %d traders, poll toutes les %ds", len(wallets), self.config.poll_interval_seconds)
+        for w in wallets:
+            initial = await self.fetch_recent_activity(w, limit=1)
+            if initial:
+                self._last_seen_ts[w] = initial[0].timestamp
+                self._seen_txs.setdefault(w, set()).add(initial[0].tx_hash)
 
-        # Seed initial : marque comme vus uniquement les trades de plus de SEED_WINDOW secondes.
-        # Les trades récents (dans la fenêtre) seront rejoués et évalués par le copy engine.
-        # Seed initial : marque comme vus les vieux trades (>10min).
-        # Les trades récents (<10min) ne sont PAS mis dans seen → seront détectés au premier poll.
-        SEED_WINDOW = 600  # secondes
-        now_ts = int(time.time())
-        for wallet in wallets:
-            initial = await self.fetch_recent_activity(wallet, limit=100)
-            seen = self._seen_hashes.setdefault(wallet, set())
-            replayed = 0
-            for t in initial:
-                if t.timestamp < now_ts - SEED_WINDOW:
-                    # Trade vieux : marquer vu ET mettre à jour last_seen
-                    seen.add(t.tx_hash)
-                    self._last_seen[wallet] = max(self._last_seen.get(wallet, 0), t.timestamp)
-                else:
-                    # Trade récent : NE PAS mettre dans seen ni last_seen
-                    # → il sera capté au prochain poll
-                    replayed += 1
-
-            # last_seen doit être juste AVANT le premier trade récent
-            # pour que le poll le détecte correctement
-            if replayed > 0 and wallet in self._last_seen:
-                # Trouver le timestamp du plus vieux trade récent - 1
-                recent = [t for t in initial if t.timestamp >= now_ts - SEED_WINDOW]
-                if recent:
-                    oldest_recent = min(t.timestamp for t in recent)
-                    self._last_seen[wallet] = min(self._last_seen.get(wallet, 0), oldest_recent - 1)
-
-            logger.info(
-                "Seed [%s]: %d trades anciens ignorés, %d trades récents (<10min) à rejouer",
-                wallet[:10], len(initial) - replayed, replayed
-            )
-
-        # Boucle principale
         while self._running:
-            # Recharge la liste (au cas où un trader a été ajouté dynamiquement)
             active_wallets = self.traders_db.all_wallets()
-            tasks = [self._poll_trader(w) for w in active_wallets]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, r in enumerate(results):
-                if isinstance(r, Exception):
-                    logger.error("Poll error [%s]: %s", active_wallets[i][:10], r)
-
+            for wallet in active_wallets:
+                await self._poll_trader(wallet)
             await asyncio.sleep(self.config.poll_interval_seconds)
 
-    async def check_market_resolution(self, condition_id: str) -> dict | None:
-        """Vérifie si un marché est résolu via l'API CLOB."""
+    async def check_market_resolution(self, condition_id: str):
         url = f"{self.config.clob_api_url}/markets/{condition_id}"
         try:
             resp = await self._client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            logger.debug("Check résolution %s: %s", condition_id[:16], e)
-            return None
-
-        if not data.get("closed"):
-            return None
-
-        winning_outcome = None
-        for token in data.get("tokens", []):
-            if token.get("winner"):
-                winning_outcome = token.get("outcome")
-                break
-
-        if winning_outcome:
-            return {"condition_id": condition_id, "winner": winning_outcome}
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("closed"):
+                    for token in data.get("tokens", []):
+                        if token.get("winner"):
+                            return {"winner": token.get("outcome")}
+        except:
+            pass
         return None
 
-    def stop(self) -> None:
+    async def fetch_recent_activity_dashboard(self, limit: int = 50) -> list[TargetTrade]:
+        """Agrège l'activité récente de tous les traders surveillés pour le dashboard."""
+        all_trades: list[TargetTrade] = []
+        wallets = self.traders_db.all_wallets()
+        for wallet in wallets:
+            trades = await self.fetch_recent_activity(wallet, limit=limit)
+            all_trades.extend(trades)
+        all_trades.sort(key=lambda t: t.timestamp, reverse=True)
+        return all_trades[:limit]
+
+    def stop(self):
         self._running = False
 
-    async def close(self) -> None:
-        self.stop()
+    async def close(self):
         await self._client.aclose()

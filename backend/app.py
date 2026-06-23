@@ -73,8 +73,6 @@ class BotController:
                 return {"status": "already_running", "is_running": True, "mode": config.mode}
 
             engine.started_at = time.time()
-            # Reset le tracker de marchés pour repartir propre
-            engine._market_trackers.clear()
             monitor._running = True
             self._resolver_should_run = True
             self.is_running = True

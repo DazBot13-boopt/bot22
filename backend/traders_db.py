@@ -1,53 +1,12 @@
-"""
-Base de données locale des traders copiés, classés par catégorie de prédilection.
-
-Usage :
-- Ajouter un trader via l'API POST /api/traders
-- Le bot vérifie automatiquement la catégorie avant de copier
-- Betmoar URL : https://www.betmoar.fun/profiles pour trouver les profils
-"""
-
 import json
 import logging
 import os
-from typing import Optional
-
 from backend.models import TraderProfile
 
 logger = logging.getLogger(__name__)
 
-# Fichier persistant (survit aux redémarrages)
+# Fichier persistant
 DB_FILE = "traders.json"
-
-# ── Traders préconfigurés (exemples à compléter) ──────────────────────────────
-# Pour chaque trader :
-#   1. Trouve son adresse sur Polymarket
-#   2. Va sur https://www.betmoar.fun/profiles pour voir ses stats par catégorie
-#   3. Note sa catégorie de prédilection (où il gagne vraiment)
-#   4. Ajoute-le ici ou via l'API dashboard
-
-DEFAULT_TRADERS: list[dict] = [
-    {
-        "wallet": "0x07480f204434ad41b1705b9d1de5bbfc451092a1",
-        "username": "claude7",
-        "specialty": "Finance",
-        "win_rate": 72.0,
-        "roi": 45.0,
-        "notes": "Trader Finance très actif, marchés 1 semaine",
-        "active": True,
-    },
-    # Ajoute d'autres traders ici ou via POST /api/traders
-    # {
-    #     "wallet": "0x...",
-    #     "username": "trader2",
-    #     "specialty": "Finance",
-    #     "win_rate": 65.0,
-    #     "roi": 30.0,
-    #     "notes": "",
-    #     "active": True,
-    # },
-]
-
 
 class TradersDB:
     """Gestion de la base de données de traders."""
@@ -56,10 +15,8 @@ class TradersDB:
         self._traders: dict[str, TraderProfile] = {}  # wallet -> profile
         self._load()
 
-    # ── Persistence ───────────────────────────────────────────────────────────
-
     def _load(self) -> None:
-        """Charge depuis le fichier JSON, sinon utilise les défauts."""
+        """Charge depuis le fichier JSON."""
         if os.path.exists(DB_FILE):
             try:
                 with open(DB_FILE) as f:
@@ -71,13 +28,6 @@ class TradersDB:
                 return
             except Exception as e:
                 logger.warning("TradersDB: impossible de lire %s: %s", DB_FILE, e)
-
-        # Première utilisation : initialise avec les défauts
-        for entry in DEFAULT_TRADERS:
-            p = TraderProfile(**entry)
-            self._traders[p.wallet.lower()] = p
-        self._save()
-        logger.info("TradersDB: %d traders par défaut chargés", len(self._traders))
 
     def _save(self) -> None:
         try:
@@ -98,9 +48,7 @@ class TradersDB:
         except Exception as e:
             logger.error("TradersDB: sauvegarde échouée: %s", e)
 
-    # ── Accès ─────────────────────────────────────────────────────────────────
-
-    def get(self, wallet: str) -> Optional[TraderProfile]:
+    def get(self, wallet: str) -> TraderProfile | None:
         return self._traders.get(wallet.lower())
 
     def all_active(self) -> list[TraderProfile]:
@@ -138,7 +86,7 @@ class TradersDB:
         )
         self._traders[wallet.lower()] = p
         self._save()
-        logger.info("TradersDB: trader ajouté/mis à jour: %s (%s)", username, specialty)
+        logger.info("TradersDB: trader ajouté/mis à jour: %s", username)
         return p
 
     def delete(self, wallet: str) -> bool:
@@ -149,34 +97,10 @@ class TradersDB:
             return True
         return False
 
-    def toggle_active(self, wallet: str) -> Optional[bool]:
+    def toggle_active(self, wallet: str) -> bool | None:
         key = wallet.lower()
         if key not in self._traders:
             return None
         self._traders[key].active = not self._traders[key].active
         self._save()
         return self._traders[key].active
-
-    # ── Intelligence : multi-trader signal ───────────────────────────────────
-
-    def count_aligned_traders(
-        self,
-        condition_id: str,
-        dominant_side: str,
-        market_trackers: dict,  # {wallet: {condition_id: tracker}}
-    ) -> int:
-        """
-        Compte combien de traders experts (dans la même catégorie)
-        ont aussi bet sur le même côté de ce marché.
-        Renvoie 0 si pas d'info.
-        """
-        count = 0
-        for wallet, tracker_map in market_trackers.items():
-            if condition_id not in tracker_map:
-                continue
-            t = tracker_map[condition_id]
-            if t.get("copied_side") == dominant_side:
-                count += 1
-            elif t.get("dominant_side") == dominant_side and t.get("total_usdc", 0) >= 50:
-                count += 1
-        return count
