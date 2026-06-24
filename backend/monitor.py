@@ -22,9 +22,13 @@ class TradeMonitor:
         self._callbacks: list[Callable] = []
         self._running = False
         self._client = httpx.AsyncClient(timeout=15.0)
-        
+
         self._last_seen_ts: dict[str, int] = {}
         self._seen_txs: dict[str, set[str]] = {}
+        # Déduplication forte : (condition_id + side + outcome) dans une fenêtre de temps
+        # wallet -> { "condid|side|outcome": timestamp_dernier_vu }
+        self._seen_market_actions: dict[str, dict[str, float]] = {}
+        self._DEDUP_WINDOW = 120  # secondes
 
     def on_new_trade(self, callback: Callable):
         self._callbacks.append(callback)
@@ -89,23 +93,39 @@ class TradeMonitor:
         trades = await self.fetch_recent_activity(wallet)
         if not trades: return
 
-        last_ts = self._last_seen_ts.get(wallet, 0)
         seen = self._seen_txs.setdefault(wallet, set())
+        market_actions = self._seen_market_actions.setdefault(wallet, {})
+        now_ts = time.time()
 
-        # Si wallet jamais initialisé (ajouté pendant que le bot tourne),
-        # on considère le trade le plus récent comme point de départ
+        # Si wallet jamais initialisé, on marque tout comme vu et on repart
         if wallet not in self._last_seen_ts:
             self._last_seen_ts[wallet] = trades[0].timestamp
-            seen.add(trades[0].tx_hash)
-            logger.info(f"Nouveau wallet initialisé: {wallet[:12]}... | point de départ ts={trades[0].timestamp}")
+            for t in trades:
+                seen.add(t.tx_hash)
+                key = f"{t.condition_id}|{t.side}|{t.outcome}"
+                market_actions[key] = float(t.timestamp)
+            logger.info(f"Wallet initialisé: {wallet[:12]}... | point de départ ts={trades[0].timestamp}")
             return
 
-        # On traite du plus vieux au plus récent
+        last_ts = self._last_seen_ts[wallet]
+
+        # Filtrer : nouveau timestamp ET tx_hash pas encore vu
         new_trades = [t for t in trades if t.timestamp > last_ts and t.tx_hash not in seen]
         new_trades.sort(key=lambda x: x.timestamp)
 
         for trade in new_trades:
+            # Déduplication forte : même marché+side+outcome dans la fenêtre ?
+            key = f"{trade.condition_id}|{trade.side}|{trade.outcome}"
+            last_action_ts = market_actions.get(key, 0)
+            if now_ts - last_action_ts < self._DEDUP_WINDOW:
+                logger.debug(f"⏭ Dédupliqué [{trade.trader_username}] {trade.side} {trade.outcome} | {trade.title[:40]}")
+                seen.add(trade.tx_hash)
+                self._last_seen_ts[wallet] = max(self._last_seen_ts.get(wallet, 0), trade.timestamp)
+                continue
+
             logger.info(f"🔔 [{trade.trader_username}] {trade.side} {trade.outcome} | {trade.title[:50]} | {trade.usdc_size:.2f} USDC")
+            market_actions[key] = now_ts
+
             for cb in self._callbacks:
                 try:
                     await cb(trade)
@@ -118,6 +138,9 @@ class TradeMonitor:
         # Nettoyage mémoire
         if len(seen) > 1000:
             self._seen_txs[wallet] = set(list(seen)[-500:])
+        # Nettoyage des vieilles entrées market_actions
+        cutoff = now_ts - self._DEDUP_WINDOW * 2
+        self._seen_market_actions[wallet] = {k: v for k, v in market_actions.items() if v > cutoff}
 
     async def start(self):
         self._running = True
